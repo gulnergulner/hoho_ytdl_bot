@@ -14,7 +14,7 @@ Container Manager와 Docker Compose가 필요합니다. 실제 볼륨 경로 및
 python3 -c 'import getpass,json,urllib.request; t=getpass.getpass("Bot token: "); print(json.dumps(json.load(urllib.request.urlopen("https://api.telegram.org/bot"+t+"/getUpdates")), ensure_ascii=False, indent=2))'
 ```
 
-2. 저장소를 NAS에 복제하고 설정합니다. **기존 서비스가 있는 경로에 바로 복제하거나 덮어쓰지 마세요.**
+2. 저장소는 비공개이므로 NAS에서 GitHub 인증(SSH 키 또는 액세스 토큰)이 필요합니다. 저장소를 NAS에 복제하고 설정합니다. **기존 서비스가 있는 경로에 바로 복제하거나 덮어쓰지 마세요.**
 
 ```sh
 git clone https://github.com/gulnergulner/hoho_ytdl_bot.git /volume4/docker/hoho_ytdl_bot-new
