@@ -1,0 +1,15 @@
+services:
+  telegram-bot:
+    build: .
+    env_file: .env
+    environment:
+      BOT_DATA_DIR: /downloads
+      BOT_STATE_DIR: /bot-state
+      TZ: Asia/Seoul
+    volumes:
+      - ./data/telegram:/downloads
+      - ./state/telegram:/bot-state
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    restart: unless-stopped

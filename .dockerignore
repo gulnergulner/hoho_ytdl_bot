@@ -1,0 +1,6 @@
+.git
+.env*
+data
+state
+__pycache__
+.DS_Store
