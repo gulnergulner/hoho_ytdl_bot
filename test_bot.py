@@ -24,15 +24,29 @@ class BotTests(unittest.TestCase):
             bot.handle({'message': {'chat': {'id': 123, 'type': 'private'}, 'from': {'id': 123}, 'text': '/start'}})
             send.assert_called_once()
 
-    def test_large_file_stays_on_nas(self):
+    def test_title_is_safe_and_length_limited(self):
+        self.assertEqual(bot.safe_title(' 찬양/예배: 제목 '), '찬양_예배_ 제목')
+        self.assertLessEqual(len(bot.safe_title('한' * 200).encode()), 180)
+        self.assertEqual(bot.safe_title('...'), '제목 없음')
+
+    def test_link_is_sent_instead_of_upload(self):
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / 'abcdefghijk.mp3'
-            path.write_bytes(b'123')
+            path = Path(directory) / '제목 [abcdefghijk].mp3'
+            path.write_bytes(b'audio')
             message = {'message': {'chat': {'id': 123, 'type': 'private'}, 'from': {'id': 123}, 'text': 'https://youtu.be/abcdefghijk'}}
-            with patch.object(bot, 'USER_ID', '123'), patch.object(bot, 'LIMIT', 2), patch.object(bot, 'convert', return_value=path), patch.object(bot, 'send') as send, patch.object(bot, 'send_file') as upload:
+            with patch.object(bot, 'USER_ID', '123'), patch.object(bot, 'convert', return_value=path), patch.object(bot, 'sharing_link', return_value=('https://gofile.me/example', '2026-11-08')), patch.object(bot, 'send') as send:
                 bot.handle(message)
-                upload.assert_not_called()
+                self.assertIn('https://gofile.me/example', send.call_args.args[1])
                 self.assertIn(path.name, send.call_args.args[1])
+
+    def test_sharing_uses_dsm_path_and_expiration(self):
+        env = {'DSM_URL': 'https://nas.example.com:5001', 'DSM_ACCOUNT': 'bot', 'DSM_PASSWORD': 'secret', 'DSM_DOWNLOADS_PATH': '/docker/bot/data/telegram'}
+        results = [{'sid': 'session'}, {'links': [{'url': 'https://gofile.me/example', 'error': 0}]}, {}]
+        with patch.dict(bot.os.environ, env), patch.object(bot, 'dsm_request', side_effect=results) as request:
+            link, expiry = bot.sharing_link(Path('찬양 [abcdefghijk].mp3'))
+            self.assertEqual(link, 'https://gofile.me/example')
+            self.assertIn('찬양', request.call_args_list[1].args[2]['path'])
+            self.assertEqual(request.call_args_list[1].args[2]['date_expired'], bot.json.dumps(expiry))
 
 
 if __name__ == '__main__':

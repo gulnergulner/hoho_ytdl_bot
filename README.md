@@ -1,6 +1,6 @@
 # hoho_ytdl_bot
 
-개인 텔레그램 봇에 유튜브 영상 링크를 보내면 Synology NAS에서 MP3로 변환합니다. 지정한 사용자와의 개인 대화만 처리합니다. 49,000,000바이트 이하 파일은 텔레그램으로 전송하며, 모든 파일은 `data/telegram/`에 보관합니다. 다운로드 권한이 있는 영상에 사용하고 저작권과 이용 약관을 확인하세요.
+개인 텔레그램 봇에 유튜브 영상 링크를 보내면 Synology NAS에서 MP3로 변환합니다. 지정한 사용자와의 개인 대화만 처리합니다. 모든 파일은 `data/telegram/`에 영상 제목과 ID로 보관하고 File Station 공유 링크를 텔레그램으로 전송합니다. 파일을 텔레그램에 업로드하지 않습니다. 다운로드 권한이 있는 영상에 사용하고 저작권과 이용 약관을 확인하세요.
 
 이 저장소는 manna2와 별도입니다. 향후 manna2 연동은 계획이며 현재 API, 공유 작업 큐 또는 자동 게시는 구현되어 있지 않습니다.
 
@@ -25,7 +25,11 @@ cp .env.example .env
 chmod 600 .env
 ```
 
-`.env`에 `TELEGRAM_BOT_TOKEN`과 `TELEGRAM_USER_ID`를 설정한 다음 실행합니다.
+`.env`에 텔레그램 설정과 DSM 설정을 입력합니다. `DSM_URL`은 컨테이너에서 접근 가능한 DSM HTTPS 주소로, 인증서가 해당 호스트명과 일치하고 신뢰되어야 합니다. `DSM_ACCOUNT`와 `DSM_PASSWORD`는 File Station 및 다운로드 폴더 접근과 공유 링크 생성 권한이 있는 별도 DSM 계정의 자격 증명입니다. 2단계 인증이 필요한 계정은 이 방식으로 자동 로그인하지 못할 수 있습니다. `DSM_DOWNLOADS_PATH`는 File Station에서 보이는 경로로, 예를 들어 `/docker/hoho_ytdl_bot-new/data/telegram`입니다 (`/volume4` 제외). Compose의 볼륨 경로와 정확히 같은 폴더여야 합니다. 암호는 환경변수에 저장되므로 .env와 Docker 관리 권한을 제한하세요.
+
+QuickConnect의 고급 설정에서 파일 공유를 활성화하면 File Station에서 외부 접속 가능한 `gofile.me` 링크를 생성할 수 있습니다. 링크는 내일 날짜에 만료되도록 요청하며 링크를 가진 사람은 접근할 수 있습니다. 실제 생성 URL과 만료 동작은 NAS에서 확인하세요. 원격 접속 주소와 DSM 내부 API 주소는 같을 필요가 없습니다.
+
+설정 후 실행합니다.
 
 ```sh
 sudo docker compose up -d --build

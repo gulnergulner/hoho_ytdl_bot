@@ -1,20 +1,19 @@
 """Private Telegram-to-MP3 bot; outbound connections only."""
-import http.client
 import json
 import os
 from pathlib import Path
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 import re
 import subprocess
 import time
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlsplit, urlencode
 import urllib.request
-import uuid
 
 TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
 USER_ID = os.environ.get('TELEGRAM_USER_ID', '')
 DATA = Path(os.getenv('BOT_DATA_DIR', '/downloads'))
 STATE = Path(os.getenv('BOT_STATE_DIR', '/state'))
-LIMIT = 49_000_000
 VIDEO_ID = re.compile(r'^[A-Za-z0-9_-]{11}$')
 
 
@@ -55,35 +54,72 @@ def send(chat, text):
     api('sendMessage', {'chat_id': chat, 'text': text})
 
 
-def send_file(chat, path):
-    boundary = uuid.uuid4().hex
-    head = (f'--{boundary}\r\nContent-Disposition: form-data; name="chat_id"\r\n\r\n{chat}\r\n'
-            f'--{boundary}\r\nContent-Disposition: form-data; name="document"; filename="{path.name}"\r\n'
-            'Content-Type: audio/mpeg\r\n\r\n').encode()
-    tail = f'\r\n--{boundary}--\r\n'.encode()
-    conn = http.client.HTTPSConnection('api.telegram.org', timeout=180)
+def safe_title(title):
+    title = re.sub(r'[\\/:*?"<>|\x00-\x1f\x7f]', '_', title)
+    title = re.sub(r'\s+', ' ', title).strip(' .') or '제목 없음'
+    while len(title.encode('utf-8')) > 180:
+        title = title[:-1]
+    return title.rstrip(' .') or '제목 없음'
+
+
+def dsm_request(base, endpoint, params):
+    req = urllib.request.Request(base.rstrip('/') + '/webapi/' + endpoint,
+                                 data=urlencode(params).encode(), method='POST')
+    with urllib.request.urlopen(req, timeout=30) as response:
+        result = json.load(response)
+    if not result.get('success'):
+        raise RuntimeError('dsm_api_error')
+    return result.get('data', {})
+
+
+def sharing_link(path):
+    base = os.environ.get('DSM_URL', '').rstrip('/')
+    account = os.environ.get('DSM_ACCOUNT', '')
+    password = os.environ.get('DSM_PASSWORD', '')
+    folder = os.environ.get('DSM_DOWNLOADS_PATH', '').rstrip('/')
+    parsed = urlsplit(base)
+    if (parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password
+            or parsed.path not in ('', '/') or parsed.query or parsed.fragment
+            or not account or not password or not folder.startswith('/')):
+        raise ValueError('missing_dsm_configuration')
+    session = dsm_request(base, 'auth.cgi', {'api': 'SYNO.API.Auth', 'version': '3',
+                          'method': 'login', 'account': account, 'passwd': password,
+                          'session': 'FileStation', 'format': 'sid'})['sid']
     try:
-        conn.putrequest('POST', f'/bot{TOKEN}/sendDocument')
-        conn.putheader('Content-Type', f'multipart/form-data; boundary={boundary}')
-        conn.putheader('Content-Length', str(len(head) + path.stat().st_size + len(tail)))
-        conn.endheaders()
-        conn.send(head)
-        with path.open('rb') as source:
-            while chunk := source.read(1024 * 1024):
-                conn.send(chunk)
-        conn.send(tail)
-        response = conn.getresponse()
-        result = json.loads(response.read())
-        if response.status != 200 or not result.get('ok'):
-            raise RuntimeError('telegram_upload_failed')
+        expiry = (datetime.now(ZoneInfo('Asia/Seoul')).date() + timedelta(days=1)).isoformat()
+        result = dsm_request(base, 'entry.cgi', {'api': 'SYNO.FileStation.Sharing',
+                             'version': '3', 'method': 'create', '_sid': session,
+                             'path': json.dumps(folder + '/' + path.name, ensure_ascii=False),
+                             'date_expired': json.dumps(expiry)})
+        links = result.get('links', [])
+        if not links or links[0].get('error', 0) != 0 or not links[0].get('url'):
+            raise RuntimeError('dsm_sharing_failed')
+        link = links[0]['url']
+        if urlsplit(link).scheme != 'https':
+            raise RuntimeError('dsm_insecure_link')
+        return link, expiry
     finally:
-        conn.close()
+        try:
+            dsm_request(base, 'auth.cgi', {'api': 'SYNO.API.Auth', 'version': '3',
+                        'method': 'logout', 'session': 'FileStation', '_sid': session})
+        except Exception:
+            pass
 
 
 def convert(vid):
     DATA.mkdir(parents=True, exist_ok=True)
-    final = DATA / f'{vid}.mp3'
-    if final.is_file() and final.stat().st_size:
+    matches = sorted(p for p in DATA.iterdir() if p.name.endswith(f' [{vid}].mp3'))
+    if matches and matches[0].is_file() and matches[0].stat().st_size:
+        return matches[0]
+    metadata = subprocess.run(['yt-dlp', '--ignore-config', '--no-playlist', '--js-runtimes', 'deno',
+                               '--skip-download', '--print', '%(title)j',
+                               f'https://www.youtube.com/watch?v={vid}'],
+                              capture_output=True, check=True, timeout=120)
+    title = json.loads(metadata.stdout.decode('utf-8').strip())
+    final = DATA / f'{safe_title(title)} [{vid}].mp3'
+    old = DATA / f'{vid}.mp3'
+    if old.is_file() and old.stat().st_size:
+        old.replace(final)
         return final
     work = DATA / '.tmp' / vid
     work.mkdir(parents=True, exist_ok=True)
@@ -122,12 +158,10 @@ def handle(update):
     send(chat['id'], '변환을 시작합니다. 영상 길이에 따라 시간이 걸릴 수 있습니다.')
     try:
         path = convert(vid)
-        if path.stat().st_size <= LIMIT:
-            send_file(chat['id'], path)
-        else:
-            send(chat['id'], f'변환 완료. 파일이 텔레그램 전송 한도를 넘어 NAS에 저장했습니다: {path.name}')
+        link, expiry = sharing_link(path)
+        send(chat['id'], f'변환 완료: {path.name}\n다운로드: {link}\n링크 만료일: {expiry} (NAS 시간 기준)')
     except Exception:
-        send(chat['id'], '변환 또는 전송에 실패했습니다. 영상 접근 가능 여부와 NAS 상태를 확인한 후 다시 보내주세요.')
+        send(chat['id'], '변환 또는 NAS 다운로드 링크 생성에 실패했습니다. 영상 접근 가능 여부와 NAS 상태를 확인한 후 다시 보내주세요.')
 
 
 def main():
